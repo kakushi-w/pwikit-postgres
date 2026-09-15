@@ -1,0 +1,75 @@
+name: Build
+
+on:
+  push:
+    tags: ["*.*.*-*"]
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: amd64
+            runner: ubuntu-24.04
+            image: quay.io/pypa/manylinux_2_28_x86_64
+          - arch: arm64
+            runner: ubuntu-24.04-arm
+            image: quay.io/pypa/manylinux_2_28_aarch64
+    runs-on: ${{ matrix.runner }}
+    name: build linux-${{ matrix.arch }}
+    env:
+      PACKAGE: postgresql-${{ github.ref_name }}-linux-${{ matrix.arch }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Check that the tag names the version in postgres.env
+        run: |
+          . ./postgres.env
+          case "$GITHUB_REF_NAME" in
+            "$PG_VERSION.0-"[0-9]*) ;;
+            *) echo "tag $GITHUB_REF_NAME does not match PG_VERSION=$PG_VERSION; expected $PG_VERSION.0-<n>"; exit 1 ;;
+          esac
+
+      - name: Build
+        run: docker run --rm -v "$PWD:/src" -w /src ${{ matrix.image }} sh build.sh dist "$PACKAGE"
+
+      - name: Test
+        run: docker run --rm -v "$PWD:/src" -w /src ${{ matrix.image }} sh test.sh "dist/$PACKAGE.txz"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: linux-${{ matrix.arch }}
+          path: dist/*.txz
+          if-no-files-found: error
+          retention-days: 7
+
+  release:
+    needs: build
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: linux-*
+          path: dist
+          merge-multiple: true
+
+      - name: Publish the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          . ./postgres.env
+          cd dist
+          sha256sum *.txz > SHA256SUMS
+          cat SHA256SUMS
+          gh release create "$GITHUB_REF_NAME" *.txz SHA256SUMS \
+            --repo "$GITHUB_REPOSITORY" \
+            --title "$GITHUB_REF_NAME" \
+            --notes "PostgreSQL $PG_VERSION for Linux amd64 and arm64, built in manylinux_2_28 without OpenSSL, ICU, readline or zlib. Each package holds bin, lib and share, with the PostgreSQL COPYRIGHT file at the top."

@@ -1,0 +1,21 @@
+name: Check for PostgreSQL releases
+
+on:
+  schedule:
+    - cron: "23 2 * * 1"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  issues: write
+
+jobs:
+  check:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Open an issue for a release not built yet
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: sh check.sh
